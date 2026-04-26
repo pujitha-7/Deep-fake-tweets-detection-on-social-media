@@ -1,0 +1,159 @@
+#Importing packages 
+import pandas as pd  
+import numpy as np  
+import matplotlib.pyplot as plt  
+import seaborn as sns 
+import plotly.express as px 
+import plotly.io as pio 
+import joblib
+ 
+from sklearn.preprocessing import LabelEncoder, StandardScaler 
+from sklearn.metrics import mean_squared_error, r2_score, accuracy_score 
+from sklearn.model_selection import train_test_split 
+from xgboost import XGBRegressor  # Note: Project uses Regressor for 0-100 Score
+ 
+import warnings 
+warnings.simplefilter(action="ignore") 
+ 
+ 
+#Uploading DataSet (Generating Synthetic Behavioral Data) 
+ 
+def generate_data(n_samples=10000):
+    np.random.seed(42)
+    data = {
+        'totalInteractions': np.random.poisson(50, n_samples),
+        'totalSessions': np.random.poisson(10, n_samples),
+        'avgTimeBetweenEvents': np.random.exponential(5, n_samples),
+        'uniquePages': np.random.poisson(8, n_samples),
+        'avgSessionDuration': np.random.exponential(200, n_samples),
+        'totalSessionsCount': np.random.poisson(10, n_samples),
+    }
+    df = pd.DataFrame(data)
+    
+    # Logic: High activity = Higher Score, Fast Clicks = Lower Score
+    score = 50 
+    score += (df['totalInteractions'] / 10).clip(0, 20)
+    score += (df['uniquePages'] / 2).clip(0, 15)
+    score -= (df['avgTimeBetweenEvents'] < 1).astype(int) * 20
+    df['trust_score'] = score.clip(0, 100)
+    return df
+
+df = generate_data(10000)
+df.head() 
+ 
+ 
+#Seeing Data 
+ 
+df.info() 
+ 
+print(df.isna().sum()) 
+ 
+print(df.duplicated().sum()) 
+
+# Distribution of Target Variable
+plt.figure(figsize=(10, 5)) 
+sns.histplot(df['trust_score'], bins=20, kde=True, color="blue") 
+plt.title('Distribution of Trust Scores') 
+plt.xlabel('Trust Score (0-100)') 
+plt.ylabel('Frequency') 
+plt.show() 
+
+# Age/Activity Distribution (Boxplot example)
+sns.boxplot(x=df['totalInteractions']) 
+plt.title('Interactions Distribution') 
+plt.show() 
+ 
+ 
+#Performing EDA 
+ 
+# Risk Level Categorization for Visualization
+df['risk_level'] = pd.cut(df['trust_score'], bins=[0, 40, 70, 100], labels=['High', 'Medium', 'Low'])
+risk_counts = df['risk_level'].value_counts() 
+ 
+val = risk_counts.values 
+index = risk_counts.index 
+fig = px.pie(values=val, names=index, template='plotly_dark', title='Risk Level Distribution')
+fig.update_traces(textinfo='label+percent') 
+fig.show() 
+ 
+plt.figure(figsize=(10, 5)) 
+sns.scatterplot(data=df, x='totalInteractions', y='trust_score', hue='risk_level')
+plt.title('Interactions vs Trust Score') 
+plt.show() 
+
+numeric_columns = df.select_dtypes(include=['number']).columns 
+ 
+ 
+#Handaling outlier 
+def outliers_handler(real_data:pd.DataFrame(), col_name:str)->pd.DataFrame(): 
+    data = real_data.copy() 
+    q1 = np.percentile(data[col_name], 25) 
+    q3 = np.percentile(data[col_name], 75) 
+    iqr = q3 - q1 
+    upper_bound = q3 + (1.5 * iqr) 
+    lower_bound = q1 - (1.5 * iqr) 
+     
+    outliers = (data[col_name] > upper_bound) | (data[col_name] < lower_bound) 
+    num_of_outliers = len(data[outliers]) 
+    
+    if num_of_outliers <= len(data) * 0.1: 
+        data = data[~outliers] 
+    else: 
+        data.loc[data[col_name] > upper_bound, col_name] = upper_bound 
+        data.loc[data[col_name] < lower_bound, col_name] = lower_bound 
+    return data 
+
+for i in numeric_columns: 
+    if i == 'trust_score': 
+        break 
+    df = outliers_handler(df, i) 
+ 
+ 
+# Encoding (Handling Risk Level for Analysis)
+le = LabelEncoder() 
+df['risk_level_encoded'] = le.fit_transform(df['risk_level']) 
+ 
+df.head() 
+x = df.drop(columns=['trust_score', 'risk_level', 'risk_level_encoded'])  
+y = df['trust_score'] 
+ 
+ 
+# Training And Testing 
+ 
+x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2, random_state=42) 
+ 
+combined = pd.concat([x_train, y_train], axis=1) 
+correlation_matrix = combined.corr()  
+plt.figure(figsize=(10, 8))
+sns.heatmap(correlation_matrix, annot=True, fmt='.2f', cmap='coolwarm') 
+plt.title('Feature Correlation Matrix')
+plt.show() 
+ 
+sc = StandardScaler() 
+x_train = sc.fit_transform(x_train) 
+x_test = sc.transform(x_test) 
+ 
+ 
+#Model Training (XGBoost Regressor)
+ 
+model = XGBRegressor( 
+    n_estimators=200, 
+    learning_rate=0.05, 
+    max_depth=6, 
+    random_state=42 
+) 
+ 
+model.fit(x_train, y_train) 
+ 
+y_pred = model.predict(x_test) 
+ 
+# Evaluating Model
+mse = mean_squared_error(y_test, y_pred)
+r2 = r2_score(y_test, y_pred)
+
+print(f"Mean Squared Error: {mse:.2f}") 
+print(f"R2 Score (Accuracy): {r2:.4f}")
+
+# Save the professional model file
+joblib.dump(model, 'model.pkl') 
+print("Model stored as model.pkl")
